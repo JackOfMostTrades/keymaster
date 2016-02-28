@@ -37,7 +37,7 @@ func ImportClientCert(args []string) {
 
 func RunServer(args []string) {
 	if (len(args) > 3) || (len(args) >= 1 && args[0] == "help") {
-		fmt.Printf("Usage: %s server [certRefreshInterval [certLifetime [pollInterval]]] \n", os.Args[0])
+		fmt.Printf("Usage: %s server [certRotateInterval [certLifetime [pollInterval]]] \n", os.Args[0])
 		os.Exit(1)
 	}
 
@@ -98,27 +98,30 @@ func RunServer(args []string) {
 		log.Fatalf("No current certificates found.")
 	}
 
-	var certRefreshInterval time.Duration = 0
+	server := NewServer(certs)
 	if len(args) > 0 {
-		certRefreshInterval, err = time.ParseDuration(args[0])
+		certRotateInterval, err := time.ParseDuration(args[0])
 		if err != nil {
 			log.Fatalf("Could not parse duration argument: %s", err)
 		}
+		server.ServerRotatePeriod = certRotateInterval
 	}
-	var certLifetime time.Duration = 0
 	if len(args) > 1 {
-		certLifetime, err = time.ParseDuration(args[1])
+		certLifetime, err := time.ParseDuration(args[1])
 		if err != nil {
 			log.Fatalf("Could not parse lifetime argument: %s", err)
 		}
+		server.ServerCertLifetime = certLifetime
 	}
-	var pollInterval time.Duration = 0
 	if len(args) > 2 {
-		pollInterval, err = time.ParseDuration(args[2])
+		pollInterval, err := time.ParseDuration(args[2])
 		if err != nil {
 			log.Fatalf("Could not parse poll interval argument: %s", err)
 		}
+		server.ServerPollInterval = pollInterval
+		server.Poll()
 	}
 
-	Start(certs, certRefreshInterval, certLifetime, pollInterval)
+	server.WaitFor()
+	server.Close()
 }

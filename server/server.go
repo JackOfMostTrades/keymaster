@@ -10,15 +10,22 @@ import (
 	"log"
 	"net"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/JackOfMostTrades/keymaster/common"
 )
 
 type Server struct {
-	listener  net.Listener
-	tlsConfig *tls.Config
-	db        *DbConn
+	listener     net.Listener
+	tlsConfig    *tls.Config
+	db           *DbConn
+	waitGroup    sync.WaitGroup
+	shuttingDown bool
+
+	pollChan    chan int
+	pollWaiters []chan int
+	pollMutex   sync.Mutex
 
 	ServerRotatePeriod time.Duration
 	ServerCertLifetime time.Duration
@@ -38,11 +45,10 @@ func getNewServerCertIndex() int {
 	return index
 }
 
-func Start(serverCerts []tls.Certificate,
-	rotatePeriod time.Duration,
-	certLifetime time.Duration,
-	pollInterval time.Duration) *Server {
-	db := DbOpen()
+func NewServer(serverCerts []tls.Certificate) *Server {
+	return newServerWithDb(serverCerts, DbOpen())
+}
+func newServerWithDb(serverCerts []tls.Certificate, db *DbConn) *Server {
 
 	tlsConfig := &tls.Config{
 		Certificates: serverCerts,
@@ -54,44 +60,49 @@ func Start(serverCerts []tls.Certificate,
 		log.Fatalf("Unable to start server: %s", err)
 	}
 
-	if rotatePeriod == 0 {
-		rotatePeriod = 4 * time.Hour
-	}
-	if certLifetime == 0 {
-		certLifetime = 24 * time.Hour
-	}
-	if pollInterval == 0 {
-		pollInterval = 1 * time.Hour
-	}
-
 	server := &Server{
-		listener:           listener,
-		tlsConfig:          tlsConfig,
-		db:                 db,
-		ServerRotatePeriod: rotatePeriod,
-		ServerCertLifetime: certLifetime,
-		ServerPollInterval: pollInterval,
+		listener:     listener,
+		tlsConfig:    tlsConfig,
+		db:           db,
+		waitGroup:    sync.WaitGroup{},
+		shuttingDown: false,
+
+		pollChan:    make(chan int),
+		pollWaiters: nil,
+		pollMutex:   sync.Mutex{},
+
+		ServerRotatePeriod: 4 * time.Hour,
+		ServerCertLifetime: 24 * time.Hour,
+		ServerPollInterval: 1 * time.Hour,
 	}
 
-	listenerChan := make(chan int)
+	server.waitGroup.Add(1)
 	go func() {
 		log.Printf("Starting server routine.")
 		for {
 			conn, err := listener.Accept()
-			if err != nil {
-				log.Printf("Server acceptor goroutine is shutting down.")
-				return
+			if err == nil {
+				go server.handleConnection(conn)
 			}
-			go server.handleConnection(conn)
+			if server.shuttingDown {
+				break
+			}
 		}
 		log.Printf("Server routine exiting.")
-		listenerChan <- 0
+		server.waitGroup.Done()
 	}()
 
-	updateServerCertChan := make(chan int)
+	server.waitGroup.Add(1)
 	go func() {
 		log.Printf("Starting server cert refresh routine.")
 		for {
+			poller := time.NewTimer(server.ServerPollInterval)
+			select {
+			case <-poller.C:
+			case <-server.pollChan:
+			}
+			poller.Stop()
+
 			var newCerts []tls.Certificate
 			lastExpiration := time.Now()
 			for _, cert := range serverCerts {
@@ -136,22 +147,48 @@ func Start(serverCerts []tls.Certificate,
 				tlsConfig.Certificates = serverCerts
 			}
 
-			time.Sleep(server.ServerPollInterval)
-		}
-		log.Printf("Server refresh routine shutdown.")
-		updateServerCertChan <- 0
-	}()
+			server.pollMutex.Lock()
+			for i := range server.pollWaiters {
+				server.pollWaiters[i] <- 0
+			}
+			server.pollWaiters = nil
+			server.pollMutex.Unlock()
 
-	// Block returning until gorountines return
-	<-listenerChan
-	<-updateServerCertChan
+			if server.shuttingDown {
+				break
+			}
+		}
+
+		log.Printf("Server refresh routine shutdown.")
+		server.waitGroup.Done()
+	}()
 
 	return server
 }
 
+// Wait until the server shuts down. This will generally never happen by itself
+// so it will either block forever or wait until some other thread causes it
+// to close.
+func (server *Server) WaitFor() {
+	server.waitGroup.Wait()
+}
+
+func (server *Server) Poll() {
+	mychan := make(chan int)
+	server.pollMutex.Lock()
+	server.pollWaiters = append(server.pollWaiters, mychan)
+	server.pollMutex.Unlock()
+
+	server.pollChan <- 0
+	<-mychan
+}
+
 func (server *Server) Close() {
+	server.shuttingDown = true
+	server.Poll()
 	server.db.Close()
 	server.listener.Close()
+	server.WaitFor()
 }
 
 func (server *Server) handleConnection(conn net.Conn) {
@@ -169,14 +206,7 @@ func (server *Server) handleConnection(conn net.Conn) {
 	decoder.Decode(&commandName)
 
 	if commandName.Command == "GetServerCertificates" {
-		var response []string
-		for _, cert := range server.tlsConfig.Certificates {
-			xCert, err := x509.ParseCertificate(cert.Certificate[0])
-			if err != nil {
-				log.Fatal("Could not parse loaded x509 certificate.")
-			}
-			response = append(response, hex.EncodeToString(xCert.Signature))
-		}
+		response := server.getServerCertificates()
 		json.NewEncoder(conn).Encode(response)
 		return
 	}
@@ -226,6 +256,17 @@ func (server *Server) handleConnection(conn net.Conn) {
 	json.NewEncoder(conn).Encode(response)
 }
 
+func (server *Server) getServerCertificates() []string {
+	var response []string
+	for _, cert := range server.tlsConfig.Certificates {
+		xCert, err := x509.ParseCertificate(cert.Certificate[0])
+		if err != nil {
+			log.Fatal("Could not parse loaded x509 certificate.")
+		}
+		response = append(response, hex.EncodeToString(xCert.Signature))
+	}
+	return response
+}
 func (server *Server) getPublicKeys(clientId string, command common.GetPublicKeysCommand) []common.DbCert {
 	return server.db.GetPublicKeys(clientId, command.SecretKey)
 }

@@ -8,8 +8,8 @@ import (
 	"time"
 
 	"github.com/JackOfMostTrades/keymaster/client"
+	"github.com/JackOfMostTrades/keymaster/common"
 	"github.com/JackOfMostTrades/keymaster/server"
-	"github.com/JackOfMostTrades/keymaster/util"
 )
 
 func usage() {
@@ -54,7 +54,7 @@ func genCert(args []string) {
 		log.Fatalf("Unable to parse lifetime argument: %s", err)
 	}
 
-	cert, priv := util.GenCert(args[0], lifetime)
+	cert, priv := common.GenCert(args[0], lifetime)
 	err = ioutil.WriteFile(args[2], cert, 0644)
 	if err != nil {
 		log.Fatalf("Error writing file: %s", err)

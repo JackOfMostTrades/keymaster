@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/JackOfMostTrades/keymaster/common"
-	"github.com/JackOfMostTrades/keymaster/util"
 )
 
 type Server struct {
@@ -113,7 +112,7 @@ func Start(serverCerts []tls.Certificate,
 				if err != nil {
 					log.Fatalf("Unable to parse loaded x509 certificate.")
 				}
-				certBytes, privBytes := util.GenCert(xCert.Subject.CommonName, server.ServerCertLifetime)
+				certBytes, privBytes := common.GenCert(xCert.Subject.CommonName, server.ServerCertLifetime)
 				// Save the certificate to the server_certs dir
 				certIndex := getNewServerCertIndex()
 				ioutil.WriteFile(fmt.Sprintf("./server_certs/%.4d.crt", certIndex), certBytes, 0644)

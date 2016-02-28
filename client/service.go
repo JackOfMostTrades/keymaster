@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/JackOfMostTrades/keymaster/common"
-	"github.com/JackOfMostTrades/keymaster/util"
 )
 
 type Service struct {
@@ -75,7 +74,7 @@ func (service *Service) rotateClientCert() {
 	if clientCert.NotAfter.Before(time.Now().Add(service.ClientRotatePeriod)) {
 		log.Printf("Rotating client certificate.")
 
-		certBytes, pemBytes := util.GenCert(clientCert.Subject.CommonName, service.ClientCertLifetime)
+		certBytes, pemBytes := common.GenCert(clientCert.Subject.CommonName, service.ClientCertLifetime)
 		tlsCert, err := tls.X509KeyPair(certBytes, pemBytes)
 		if err != nil {
 			log.Fatalf("Could not load x509 certificate as TLS cert: %s", err)

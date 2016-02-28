@@ -19,7 +19,7 @@ import (
 type Server struct {
 	listener     net.Listener
 	tlsConfig    *tls.Config
-	db           *DbConn
+	db           dao
 	waitGroup    sync.WaitGroup
 	shuttingDown bool
 
@@ -46,9 +46,9 @@ func getNewServerCertIndex() int {
 }
 
 func NewServer(serverCerts []tls.Certificate) *Server {
-	return newServerWithDb(serverCerts, DbOpen())
+	return newServerWithDb(serverCerts, NewSqlDao())
 }
-func newServerWithDb(serverCerts []tls.Certificate, db *DbConn) *Server {
+func newServerWithDb(serverCerts []tls.Certificate, db dao) *Server {
 
 	tlsConfig := &tls.Config{
 		Certificates: serverCerts,

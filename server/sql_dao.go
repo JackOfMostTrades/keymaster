@@ -14,25 +14,23 @@ import (
 	"github.com/JackOfMostTrades/keymaster/common"
 )
 
-// Functions providing a DAO-like interface to DB data
-
-type DbConn struct {
+type sqlDao struct {
 	conn *sql.DB
 }
 
-func DbOpen() *DbConn {
+func NewSqlDao() dao {
 	con, err := sql.Open("mysql", "dev:password@/keymaster")
 	if err != nil {
 		log.Fatalf("Unable to connect to database.")
 	}
-	return &DbConn{con}
+	return &sqlDao{con}
 }
 
-func (db *DbConn) Close() {
+func (db *sqlDao) Close() {
 	db.conn.Close()
 }
 
-func (db *DbConn) getInternalClientId(clientId string) int64 {
+func (db *sqlDao) getInternalClientId(clientId string) int64 {
 	row := db.conn.QueryRow("SELECT id FROM client WHERE external_id=?", clientId)
 	var iid int64
 	err := row.Scan(&iid)
@@ -43,7 +41,7 @@ func (db *DbConn) getInternalClientId(clientId string) int64 {
 	return iid
 }
 
-func (db *DbConn) GetSecrets(clientId string, dbCertId int64, secretKey string) []common.Secret {
+func (db *sqlDao) GetSecrets(clientId string, dbCertId int64, secretKey string) []common.Secret {
 	iid := db.getInternalClientId(clientId)
 	if iid < 0 {
 		return nil
@@ -83,7 +81,7 @@ func (db *DbConn) GetSecrets(clientId string, dbCertId int64, secretKey string) 
 	return secrets
 }
 
-func (db *DbConn) AddSecrets(clientId string, secretKey string, secrets []common.Secret) {
+func (db *sqlDao) AddSecrets(clientId string, secretKey string, secrets []common.Secret) {
 	iid := db.getInternalClientId(clientId)
 	if iid < 0 {
 		return
@@ -134,7 +132,7 @@ func (db *DbConn) AddSecrets(clientId string, secretKey string, secrets []common
 	}
 }
 
-func (db *DbConn) GetPublicKeys(clientId string, secretKey string) []common.DbCert {
+func (db *sqlDao) GetPublicKeys(clientId string, secretKey string) []common.DbCert {
 	iid := db.getInternalClientId(clientId)
 	if iid < 0 {
 		return nil
@@ -173,7 +171,7 @@ func (db *DbConn) GetPublicKeys(clientId string, secretKey string) []common.DbCe
 	return result
 }
 
-func (db *DbConn) AddClientCert(clientId string, cert *x509.Certificate) int64 {
+func (db *sqlDao) AddClientCert(clientId string, cert *x509.Certificate) int64 {
 	// Verify the certificate corresponds to the client id
 	if clientId != cert.Subject.CommonName {
 		log.Printf("ERROR: Client tried adding a certificate for the wrong subject name.")
@@ -204,33 +202,7 @@ func (db *DbConn) AddClientCert(clientId string, cert *x509.Certificate) int64 {
 	return certId
 }
 
-func (db *DbConn) GetClientCerts() []*x509.Certificate {
-	rows, err := db.conn.Query(
-		"SELECT certificate FROM client_cert WHERE valid_until >= NOW()")
-	if err != nil {
-		log.Printf("ERROR: Unable to fetch certificates: %s", err)
-		return nil
-	}
-	var result []*x509.Certificate
-	for rows.Next() {
-		var bytes []byte
-		err = rows.Scan(&bytes)
-		if err != nil {
-			log.Printf("Unable to extract row result: %s", err)
-			continue
-		}
-		cert, err := x509.ParseCertificate(bytes)
-		if err != nil {
-			log.Printf("Unable to parse certificate from database: %s", err)
-			continue
-		}
-		result = append(result, cert)
-	}
-
-	return result
-}
-
-func (db *DbConn) GetClientCertIdBySignature(signature string) int64 {
+func (db *sqlDao) GetClientCertIdBySignature(signature string) int64 {
 	row := db.conn.QueryRow(
 		"SELECT id FROM client_cert WHERE signature=?", signature)
 	if row == nil {
@@ -245,7 +217,7 @@ func (db *DbConn) GetClientCertIdBySignature(signature string) int64 {
 	return id
 }
 
-func (db *DbConn) GetAllSecretsForClient(clientId string, dbCertId int64) map[string][]common.Secret {
+func (db *sqlDao) GetAllSecretsForClient(clientId string, dbCertId int64) map[string][]common.Secret {
 	iid := db.getInternalClientId(clientId)
 	if iid < 0 {
 		return nil

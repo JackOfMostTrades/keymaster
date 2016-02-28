@@ -31,7 +31,7 @@ func ImportClientCert(args []string) {
 		log.Fatalf("Error parsing certificate file: %s", err)
 	}
 
-	db := DbOpen()
+	db := NewSqlDao()
 	db.AddClientCert(cert.Subject.CommonName, cert)
 }
 

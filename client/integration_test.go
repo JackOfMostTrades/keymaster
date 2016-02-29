@@ -49,7 +49,7 @@ func TestIntegration(t *testing.T) {
 
 	srvr.ServerCertLifetime = 10 * time.Second
 	srvr.ServerPollInterval = time.Second
-	srvr.ServerRotatePeriod = 10 * time.Second
+	srvr.ServerRotatePeriod = 5 * time.Second
 	srvr.Poll()
 
 	clientCert, clientPriv := common.GenCert("client.local", 10*time.Second)
@@ -73,7 +73,7 @@ func TestIntegration(t *testing.T) {
 
 	client.ClientCertLifetime = 10 * time.Second
 	client.PollInterval = time.Second
-	client.ClientRotatePeriod = 10 * time.Second
+	client.ClientRotatePeriod = 5 * time.Second
 	client.Poll()
 
 	if string(client.GetSecret("mysecret")) != "secret1" {

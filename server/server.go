@@ -149,7 +149,7 @@ func newServerWithDb(serverCerts []tls.Certificate, db dao) *Server {
 
 			server.pollMutex.Lock()
 			for i := range server.pollWaiters {
-				server.pollWaiters[i] <- 0
+				close(server.pollWaiters[i])
 			}
 			server.pollWaiters = nil
 			server.pollMutex.Unlock()

@@ -51,10 +51,16 @@ func (client *remoteClient) doCommand(commandName string, command interface{}, r
 		InsecureSkipVerify: true,
 	})
 	if err != nil {
-		log.Fatalf("Could not connect to server.")
+		log.Printf("ERROR: Could not connect to server.")
+		return
 	}
 	if verifyServer {
 		conn.Handshake()
+		if conn.ConnectionState().PeerCertificates[0].NotAfter.Before(time.Now()) {
+			log.Printf("ERROR: Server presented expired certificate.")
+			conn.Close()
+			return
+		}
 		signature := hex.EncodeToString(conn.ConnectionState().PeerCertificates[0].Signature)
 		found := false
 		for _, sig := range client.serverCerts {
@@ -64,9 +70,10 @@ func (client *remoteClient) doCommand(commandName string, command interface{}, r
 			}
 		}
 		if !found {
-			log.Fatalf("Unable to verify server certificate.")
+			log.Printf("ERROR: Unable to verify server certificate.")
+			conn.Close()
+			return
 		}
-		//log.Printf("Verified server certificate with signature: %s", signature[:10])
 	}
 
 	encoder := json.NewEncoder(conn)

@@ -110,7 +110,7 @@ func newServerWithDb(serverCerts []tls.Certificate, db dao) *Server {
 				if err != nil {
 					log.Fatalf("Could not parse loaded x509 certificate.")
 				}
-				if time.Now().Before(xCert.NotAfter) {
+				if time.Now().Add(server.ServerPollInterval).Before(xCert.NotAfter) {
 					newCerts = append(newCerts, cert)
 					if xCert.NotAfter.After(lastExpiration) {
 						lastExpiration = xCert.NotAfter

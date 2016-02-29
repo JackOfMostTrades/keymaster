@@ -373,3 +373,37 @@ func TestGetAllSecrets(t *testing.T) {
 		t.Errorf("Incorrect secret value found: %s", string(secrets["mysecret"][0].Secret))
 	}
 }
+
+func TestRejectInvalidCert(t *testing.T) {
+	server := createServer(t)
+	defer server.Close()
+
+	server.db.(*TestDao).clients = map[int64]string{1: "foo.local"}
+	fooCert, fooPriv := common.GenCert("foo.local", 5*time.Second)
+	server.db.(*TestDao).clientCerts[1] = certRow{1, toCert(fooCert)}
+	server.db.(*TestDao).secrets = map[string][]common.Secret{
+		"mysecret": []common.Secret{common.Secret{1, []byte("foo"), time.Now(), time.Now().Add(time.Hour)}},
+	}
+
+	fooTls, _ := tls.X509KeyPair(fooCert, fooPriv)
+	var secrets map[string][]common.Secret = nil
+	doClientCommand(&fooTls, "GetAllSecrets", nil, &secrets)
+	if string(secrets["mysecret"][0].Secret) != "foo" {
+		t.Error("Unable to get initial secret value.")
+	}
+
+	badCert, badPriv := common.GenCert("foo.local", time.Hour)
+	badTls, _ := tls.X509KeyPair(badCert, badPriv)
+	secrets = nil
+	doClientCommand(&badTls, "GetAllSecrets", nil, &secrets)
+	if len(secrets) != 0 {
+		t.Error("Server did not reject invalid certificate.")
+	}
+
+	time.Sleep(5 * time.Second)
+	secrets = nil
+	doClientCommand(&fooTls, "GetAllSecrets", nil, &secrets)
+	if len(secrets) != 0 {
+		t.Error("Server did not reject expired certificate.")
+	}
+}

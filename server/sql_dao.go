@@ -96,7 +96,10 @@ func (db *sqlDao) AddSecrets(clientId string, secretKey string, secrets []common
 	row := db.conn.QueryRow("SELECT can_read,can_write FROM client_perm WHERE client_id=? AND secret_key=?",
 		iid, secretKey)
 	if row != nil {
-		row.Scan(&canRead, &canWrite)
+		err := row.Scan(&canRead, &canWrite)
+		if err != nil {
+			log.Printf("Error reading client permissions: %s", err)
+		}
 	}
 	if !canRead && !canWrite {
 		log.Printf("WARN: Client tried to update a secret to which they have neither read nor write permission.")
@@ -121,7 +124,11 @@ func (db *sqlDao) AddSecrets(clientId string, secretKey string, secrets []common
 		if !canWrite {
 			var certClientId int64
 			row := verifyPermStmt.QueryRow(v.CertId)
-			row.Scan(&certClientId)
+			err = row.Scan(&certClientId)
+			if err != nil {
+				log.Printf("ERROR executing query: %s", err)
+				continue
+			}
 			if certClientId != iid {
 				log.Printf("WARN: Client tried to update a secret for another client but they do not have write access.")
 				continue

@@ -1,11 +1,13 @@
 package server
 
 import (
+	"bytes"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
+	"sort"
 	"testing"
 	"time"
 
@@ -205,15 +207,169 @@ func TestAddClientCert(t *testing.T) {
 	}
 }
 
+func toCert(pemBytes []byte) *x509.Certificate {
+	pemBlock, _ := pem.Decode(pemBytes)
+	cert, _ := x509.ParseCertificate(pemBlock.Bytes)
+	return cert
+}
+
+type BytesSlice [][]byte
+
+func (a BytesSlice) Len() int           { return len(a) }
+func (a BytesSlice) Less(i, j int) bool { return bytes.Compare(a[i], a[j]) < 0 }
+func (a BytesSlice) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
+
+func sortByteSlices(slices [][]byte) {
+	sort.Sort(BytesSlice(slices))
+}
+
 func TestGetPublicKeys(t *testing.T) {
-	// TODO: Implement test
+	server := createServer(t)
+	defer server.Close()
+
+	server.db.(*TestDao).clients = map[int64]string{1: "foo.local", 2: "bar.local"}
+	fooCert, fooPriv := common.GenCert("foo.local", time.Hour)
+	barCert, barPriv := common.GenCert("bar.local", time.Hour)
+	server.db.(*TestDao).clientCerts[1] = certRow{1, toCert(fooCert)}
+	server.db.(*TestDao).clientCerts[2] = certRow{2, toCert(barCert)}
+	server.db.(*TestDao).clientPerms[1] = map[string][]bool{"mysecret": {true, true}}
+	server.db.(*TestDao).clientPerms[1]["othersecret"] = []bool{true, false}
+	server.db.(*TestDao).clientPerms[2] = map[string][]bool{"mysecret": {true, false}}
+	server.db.(*TestDao).clientPerms[2]["othersecret"] = []bool{true, true}
+
+	fooTls, _ := tls.X509KeyPair(fooCert, fooPriv)
+	barTls, _ := tls.X509KeyPair(barCert, barPriv)
+
+	tests := []struct {
+		cert               tls.Certificate
+		secretKey          string
+		expectedPublicKeys [][]byte
+	}{
+		{fooTls, "mysecret", [][]byte{toCert(fooCert).Raw, toCert(barCert).Raw}},
+		{fooTls, "othersecret", [][]byte{}},
+		{barTls, "mysecret", [][]byte{}},
+		{barTls, "othersecret", [][]byte{toCert(fooCert).Raw, toCert(barCert).Raw}},
+	}
+	for _, test := range tests {
+		var publicKeys []common.DbCert = nil
+		doClientCommand(&test.cert, "GetPublicKeys", common.GetPublicKeysCommand{test.secretKey}, &publicKeys)
+		if len(publicKeys) != len(test.expectedPublicKeys) {
+			t.Errorf("Incorrect number of public keys returned: %d", len(publicKeys))
+			continue
+		}
+
+		keysOut := make([][]byte, 0, len(publicKeys))
+		for i := range publicKeys {
+			keysOut = append(keysOut, publicKeys[i].Cert)
+		}
+		sortByteSlices(test.expectedPublicKeys)
+		sortByteSlices(keysOut)
+
+		for i := range test.expectedPublicKeys {
+			if !bytes.Equal(test.expectedPublicKeys[i], keysOut[i]) {
+				t.Errorf("Incorrect public key returned %s != %s.",
+					hex.EncodeToString(test.expectedPublicKeys[i]),
+					hex.EncodeToString(keysOut[i]))
+				continue
+			}
+		}
+	}
 }
 func TestAddSecrets(t *testing.T) {
-	// TODO: Implement test
+	server := createServer(t)
+	defer server.Close()
+
+	server.db.(*TestDao).clients = map[int64]string{1: "foo.local"}
+	fooCert, fooPriv := common.GenCert("foo.local", time.Hour)
+	server.db.(*TestDao).clientCerts[1] = certRow{1, toCert(fooCert)}
+	server.db.(*TestDao).clientPerms[1] = map[string][]bool{"mysecret": {true, true}}
+
+	fooTls, _ := tls.X509KeyPair(fooCert, fooPriv)
+
+	doClientCommand(&fooTls, "AddSecrets", common.AddSecretsCommand{"mysecret", []common.Secret{
+		common.Secret{1, []byte("secretValue"), time.Now(), time.Now().Add(time.Hour)}}}, nil)
+
+	if len(server.db.(*TestDao).secrets["mysecret"]) != 1 {
+		t.Error("Secret not added to database.")
+	}
+	if string(server.db.(*TestDao).secrets["mysecret"][0].Secret) != "secretValue" {
+		t.Error("Incorrect secret value saved to database.")
+	}
 }
 func TestGetSecrets(t *testing.T) {
-	// TODO: Implement test
+	server := createServer(t)
+	defer server.Close()
+
+	server.db.(*TestDao).clients = map[int64]string{1: "foo.local"}
+	fooCert, fooPriv := common.GenCert("foo.local", time.Hour)
+	server.db.(*TestDao).clientCerts[1] = certRow{1, toCert(fooCert)}
+
+	server.db.(*TestDao).secrets["mysecret"] = []common.Secret{
+		common.Secret{1, []byte("secretValue1"), time.Now(), time.Now().Add(time.Hour)},
+		common.Secret{1, []byte("secretValue2"), time.Now().Add(-1 * time.Hour), time.Now().Add(time.Hour)},
+		common.Secret{1, []byte("secretValue3"), time.Now().Add(-2 * time.Hour), time.Now().Add(-1 * time.Hour)},
+		common.Secret{2, []byte("secretValue4"), time.Now(), time.Now().Add(time.Hour)},
+		common.Secret{2, []byte("secretValue5"), time.Now(), time.Now().Add(time.Hour)},
+	}
+	server.db.(*TestDao).secrets["myOtherSecret"] = []common.Secret{
+		common.Secret{1, []byte("secretValue6"), time.Now(), time.Now().Add(time.Hour)},
+		common.Secret{2, []byte("secretValue7"), time.Now(), time.Now().Add(time.Hour)},
+	}
+
+	fooTls, _ := tls.X509KeyPair(fooCert, fooPriv)
+	var secrets []common.Secret = nil
+	doClientCommand(&fooTls, "GetSecrets", common.GetSecretsCommand{"mysecret"}, &secrets)
+
+	if len(secrets) != 2 {
+		t.Errorf("Incorrect number of results returned: %d", len(secrets))
+	}
+	if string(secrets[0].Secret) != "secretValue1" {
+		t.Errorf("Incorrect secret value found: %s", string(secrets[0].Secret))
+	}
+	if string(secrets[1].Secret) != "secretValue2" {
+		t.Errorf("Incorrect secret value found: %s", string(secrets[1].Secret))
+	}
 }
 func TestGetAllSecrets(t *testing.T) {
-	// TODO: Implement test
+	server := createServer(t)
+	defer server.Close()
+
+	server.db.(*TestDao).clients = map[int64]string{1: "foo.local"}
+	fooCert, fooPriv := common.GenCert("foo.local", time.Hour)
+	server.db.(*TestDao).clientCerts[1] = certRow{1, toCert(fooCert)}
+
+	server.db.(*TestDao).secrets["mysecret"] = []common.Secret{
+		common.Secret{1, []byte("secretValue1"), time.Now(), time.Now().Add(time.Hour)},
+		common.Secret{1, []byte("secretValue2"), time.Now().Add(-1 * time.Hour), time.Now().Add(time.Hour)},
+		common.Secret{1, []byte("secretValue3"), time.Now().Add(-2 * time.Hour), time.Now().Add(-1 * time.Hour)},
+		common.Secret{2, []byte("secretValue4"), time.Now(), time.Now().Add(time.Hour)},
+		common.Secret{2, []byte("secretValue5"), time.Now(), time.Now().Add(time.Hour)},
+	}
+	server.db.(*TestDao).secrets["myOtherSecret"] = []common.Secret{
+		common.Secret{1, []byte("secretValue6"), time.Now(), time.Now().Add(time.Hour)},
+		common.Secret{2, []byte("secretValue7"), time.Now(), time.Now().Add(time.Hour)},
+	}
+
+	fooTls, _ := tls.X509KeyPair(fooCert, fooPriv)
+	var secrets map[string][]common.Secret = nil
+	doClientCommand(&fooTls, "GetAllSecrets", nil, &secrets)
+
+	if len(secrets) != 2 {
+		t.Errorf("Incorrect number of results returned: %d", len(secrets))
+	}
+	if len(secrets["mysecret"]) != 2 {
+		t.Errorf("Incorrect number of results returned for \"mysecret\": %d", len(secrets["mysecret"]))
+	}
+	if string(secrets["mysecret"][0].Secret) != "secretValue1" {
+		t.Errorf("Incorrect secret value found: %s", string(secrets["mysecret"][0].Secret))
+	}
+	if string(secrets["mysecret"][1].Secret) != "secretValue2" {
+		t.Errorf("Incorrect secret value found: %s", string(secrets["mysecret"][1].Secret))
+	}
+	if len(secrets["myOtherSecret"]) != 1 {
+		t.Errorf("Incorrect number of results returned for \"myOtherSecret\": %d", len(secrets["myOtherSecret"]))
+	}
+	if string(secrets["myOtherSecret"][0].Secret) != "secretValue6" {
+		t.Errorf("Incorrect secret value found: %s", string(secrets["mysecret"][0].Secret))
+	}
 }

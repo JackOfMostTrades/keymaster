@@ -3,6 +3,7 @@ package server
 import (
 	"crypto/x509"
 	"encoding/hex"
+	"time"
 
 	"github.com/JackOfMostTrades/keymaster/common"
 )
@@ -36,7 +37,7 @@ func (this *TestDao) Close() {
 func (this *TestDao) GetSecrets(clientId string, dbCertId int64, secretKey string) []common.Secret {
 	var result []common.Secret
 	for _, secret := range this.secrets[secretKey] {
-		if dbCertId == secret.CertId {
+		if dbCertId == secret.CertId && secret.ValidUntil.After(time.Now()) {
 			result = append(result, secret)
 		}
 	}
@@ -48,6 +49,21 @@ func (this *TestDao) AddSecrets(clientId string, secretKey string, secrets []com
 	}
 }
 func (this *TestDao) GetPublicKeys(clientId string, secretKey string) []common.DbCert {
+	// If the client doesn't have permission to write, this should return nil
+	var iid int64 = -1
+	for ciid, name := range this.clients {
+		if name == clientId {
+			iid = ciid
+			break
+		}
+	}
+	if iid == -1 {
+		return nil
+	}
+	if !this.clientPerms[iid][secretKey][1] {
+		return nil
+	}
+
 	var certs []common.DbCert
 	for iid, permsByKey := range this.clientPerms {
 		perm := permsByKey[secretKey]
@@ -90,10 +106,10 @@ func (this *TestDao) GetClientCertIdBySignature(signature string) int64 {
 	return -1
 }
 func (this *TestDao) GetAllSecretsForClient(clientId string, dbCertId int64) map[string][]common.Secret {
-	var result map[string][]common.Secret
+	result := make(map[string][]common.Secret)
 	for secretKey, secrets := range this.secrets {
 		for _, secret := range secrets {
-			if secret.CertId == dbCertId {
+			if secret.CertId == dbCertId && secret.ValidUntil.After(time.Now()) {
 				result[secretKey] = append(result[secretKey], secret)
 			}
 		}
